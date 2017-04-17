@@ -3,9 +3,9 @@
 use super::annotations::Annotations;
 use super::context::{BindgenContext, ItemId};
 use super::derive::{CanDeriveCopy, CanDeriveDebug, CanDeriveDefault};
-use super::item::Item;
+use super::item::{Item, ItemSet};
 use super::layout::Layout;
-use super::traversal::{EdgeKind, Trace, Tracer};
+use super::traversal::{Edge, EdgeKind, Trace, Tracer, ItemTraversal};
 use super::ty::TemplateDeclaration;
 use clang;
 use parse::{ClangItemParser, ParseError};
@@ -327,6 +327,12 @@ pub struct CompInfo {
     is_forward_declaration: bool,
 }
 
+
+fn base_members(e: Edge) -> bool {
+    e.kind() == EdgeKind::BaseMember
+}
+
+
 impl CompInfo {
     /// Construct a new compound type.
     pub fn new(kind: CompKind) -> Self {
@@ -355,10 +361,21 @@ impl CompInfo {
 
     /// Is this compound type unsized?
     pub fn is_unsized(&self, ctx: &BindgenContext) -> bool {
-        !self.has_vtable(ctx) && self.fields.is_empty() &&
-        self.base_members.iter().all(|base| {
-            ctx.resolve_type(base.ty).canonical_type(ctx).is_unsized(ctx)
-        })
+
+        
+        let roots = self.base_members.iter().map( |b| b.ty );
+
+        let mut traversal = ItemTraversal::<
+                                                      ItemSet,
+                                                      Vec<ItemId>,
+                                                      fn(Edge) -> bool>::new(ctx, roots, base_members);
+
+        let base_members_unsized = traversal.all(|bm| ctx.resolve_type(bm).canonical_type(ctx).is_unsized(ctx));
+
+        
+        //let base_members_unsized = self.base_members.iter().all( |bm| ctx.resolve_type(bm.ty).canonical_type(ctx).is_unsized(ctx) );
+
+        !self.has_vtable(ctx) && self.fields.is_empty() && base_members_unsized
     }
 
     /// Does this compound type have a destructor?

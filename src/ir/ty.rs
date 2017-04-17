@@ -7,11 +7,11 @@ use super::dot::DotAttributes;
 use super::enum_ty::Enum;
 use super::function::FunctionSig;
 use super::int::IntKind;
-use super::item::{Item, ItemAncestors};
+use super::item::{Item, ItemAncestors, ItemSet};
 use super::layout::{Layout, Opaque};
 use super::objc::ObjCInterface;
 use super::template::{AsNamed, TemplateInstantiation};
-use super::traversal::{EdgeKind, Trace, Tracer};
+use super::traversal::{Edge, EdgeKind, Trace, Tracer, ItemTraversal};
 use clang::{self, Cursor};
 use parse::{ClangItemParser, ParseError, ParseResult};
 use std::cell::Cell;
@@ -900,16 +900,15 @@ impl Type {
             TypeKind::Void => true,
             TypeKind::Comp(ref ci) => ci.is_unsized(ctx),
             TypeKind::Opaque => self.layout.map_or(true, |l| l.size == 0),
-            TypeKind::Array(inner, size) => {
-                size == 0 || ctx.resolve_type(inner).is_unsized(ctx)
-            }
+            TypeKind::Array(_, 0) => true,
+            TypeKind::Array(inner, _) |
             TypeKind::ResolvedTypeRef(inner) |
             TypeKind::Alias(inner) |
             TypeKind::TemplateAlias(inner, _) => {
-                ctx.resolve_type(inner).is_unsized(ctx)
+                do_is_unsized(ctx, inner) 
             }
             TypeKind::TemplateInstantiation(ref inst) => {
-                ctx.resolve_type(inst.template_definition()).is_unsized(ctx)
+                do_is_unsized(ctx,inst.template_definition())
             }
             TypeKind::Named |
             TypeKind::Int(..) |
@@ -930,6 +929,8 @@ impl Type {
                 unreachable!("Should have been resolved after parsing!");
             }
         }
+
+
     }
 
     /// This is another of the nasty methods. This one is the one that takes
@@ -1440,5 +1441,31 @@ impl Trace for Type {
             TypeKind::ObjCSel |
             TypeKind::BlockPointer => {}
         }
+    }
+}
+
+fn do_is_unsized(ctx: &BindgenContext, i: ItemId) -> bool {
+
+    // instead of just calling is_unsized again, we want to do a graph traversal here
+    // we are not interested in base types
+    // so we are interested in the following edge types:
+    //
+    //
+    //
+    let roots: Vec<ItemId> = vec![i];
+
+     let mut traversal = ItemTraversal::<
+                                                      ItemSet,
+                                                      Vec<ItemId>,
+                                                      fn(Edge) -> bool>::new(ctx, roots, unsized_predicate);
+
+     traversal.all(|bm| ctx.resolve_type(bm).canonical_type(ctx).is_unsized(ctx))
+}
+
+
+fn unsized_predicate(e: Edge) -> bool {
+    match e.kind() {
+        EdgeKind::InnerType => true,
+        _ => false
     }
 }
